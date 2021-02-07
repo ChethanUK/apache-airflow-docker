@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "airflow_kube"
+version = "0.1.0"
+description = ""
+authors = ["ChethanUK <chethanuk@outlook.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+cryptography = ">=2.0.0"
+kubernetes = "11.0.0"
+apache-airflow = "1.10.10"
+typing-extensions = "^3.7.4"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

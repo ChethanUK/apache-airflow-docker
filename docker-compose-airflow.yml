@@ -1,0 +1,106 @@
+version: "3.7"
+services:  
+  # postgres used by airflow
+  postgres:
+    image: postgres:13.1
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_DB=airflow
+      - POSTGRES_PASSWORD=airflow
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    ports:
+      - 5432:5432
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./database/data:/var/lib/postgresql/data/pgdata
+      - ./database/logs:/var/lib/postgresql/data/log
+    command: >
+     postgres
+       -c listen_addresses=*
+       -c logging_collector=on
+       -c log_destination=stderr
+       -c max_connections=200
+    networks:
+      - airflow  
+
+  # airflow LocalExecutor
+  webserver:
+    # image: docker-airflow-spark:1.10.7_3.0.1
+    image: apache/airflow:1.10.10-2-python3.7
+    env_file:
+      - .env
+    restart: always
+    networks:
+      - airflow
+    depends_on:
+      - postgres
+    environment:
+      - LOAD_EX=n
+      - EXECUTOR=Local
+    volumes:
+      - ./dags:/opt/airflow/dags #DAG folder
+      # - ./config/airflow.cfg:/opt/airflow/airflow.cfg # Airflow config
+      - ./src/plugins:/opt/airflow/plugins # Plugins folder
+      # - ./logs:/opt/airflow/logs
+      # - ./files:/opt/airflow/files
+      # - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 8080:8080
+    command: webserver
+    # command: ["/usr/bin/dumb-init -- /entrypoint initdb && airflow webserver"]
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  scheduler:
+    image: apache/airflow:1.10.10-2-python3.7
+    env_file:
+      - .env
+    restart: always
+    networks:
+      - airflow
+    depends_on:
+      - webserver
+    volumes:
+      - ./dags:/opt/airflow/dags #DAG folder
+      # - ./config/airflow.cfg:/opt/airflow/airflow.cfg # Airflow config
+      - ./src/plugins:/opt/airflow/plugins # Plugins folder
+      # - ./logs:/opt/airflow/logs
+      # - ./files:/opt/airflow/files
+      # - /var/run/docker.sock:/var/run/docker.sock
+    command: scheduler
+
+  initdb:
+    image: apache/airflow:1.10.10-2-python3.7
+    networks:
+      - airflow    
+    env_file:
+      - .env
+    volumes:
+      - ./dags:/opt/airflow/dags #DAG folder
+      # - ./config/airflow.cfg:/opt/airflow/airflow.cfg # Airflow config
+      - ./src/plugins:/opt/airflow/plugins # Plugins folder
+      # - ./logs:/opt/airflow/logs
+      # - ./files:/opt/airflow/files
+      # - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: /bin/bash
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 8s
+        max_attempts: 5
+    command: -c "airflow initdb"
+    #  && airflow create_user --firstname admin --lastname admin --email admin --password admin --username admin --role Admin
+    depends_on:
+      - postgres
+
+networks:
+  airflow:
