@@ -1,140 +1,73 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
 import tempfile
-from typing import Any, Dict, Generator, Optional, Tuple, Union
+from typing import Any, Generator, Optional, Tuple, Union
 
 import yaml
+from airflow import AirflowException
+from airflow.hooks.base_hook import BaseHook
 from cached_property import cached_property
 from kubernetes import client, config, watch
-
-from airflow.exceptions import AirflowException
-# from airflow.hooks.base_hook import BaseHook
-from k8s.hooks.BaseHook import BaseHook
 
 
 def _load_body_to_dict(body):
     try:
         body_dict = yaml.safe_load(body)
     except yaml.YAMLError as e:
-        raise AirflowException(f"Exception when loading resource definition: {e}\n")
+        raise AirflowException("Exception when loading resource definition: %s\n" % e)
     return body_dict
 
 
 class KubernetesHook(BaseHook):
     """
     Creates Kubernetes API connection.
-
-    - use in cluster configuration by using ``extra__kubernetes__in_cluster`` in connection
-    - use custom config by providing path to the file using ``extra__kubernetes__kube_config_path``
-    - use custom configuration by providing content of kubeconfig file via
-        ``extra__kubernetes__kube_config`` in connection
-    - use default config by providing no extras
-
-    This hook check for configuration option in the above order. Once an option is present it will
-    use this configuration.
-
-    .. seealso::
-        For more information about Kubernetes connection:
-        :doc:`/connections/kubernetes`
-
     :param conn_id: the connection to Kubernetes cluster
-    :type conn_id: str
     """
 
-    conn_name_attr = 'kubernetes_conn_id'
-    default_conn_name = 'kubernetes_default'
-    conn_type = 'kubernetes'
-    hook_name = 'Kubernetes Cluster Connection'
-
-    @staticmethod
-    def get_connection_form_widgets() -> Dict[str, Any]:
-        """Returns connection widgets to add to connection form"""
-        from flask_appbuilder.fieldwidgets import BS3TextFieldWidget
-        from flask_babel import lazy_gettext
-        from wtforms import BooleanField, StringField
-
-        return {
-            "extra__kubernetes__in_cluster": BooleanField(lazy_gettext('In cluster configuration')),
-            "extra__kubernetes__kube_config_path": StringField(
-                lazy_gettext('Kube config path'), widget=BS3TextFieldWidget()
-            ),
-            "extra__kubernetes__kube_config": StringField(
-                lazy_gettext('Kube config (JSON format)'), widget=BS3TextFieldWidget()
-            ),
-            "extra__kubernetes__namespace": StringField(
-                lazy_gettext('Namespace'), widget=BS3TextFieldWidget()
-            ),
-        }
-
-    @staticmethod
-    def get_ui_field_behaviour() -> Dict:
-        """Returns custom field behaviour"""
-        return {
-            "hidden_fields": ['host', 'schema', 'login', 'password', 'port', 'extra'],
-            "relabeling": {},
-        }
-
     def __init__(
-        self, conn_id: str = default_conn_name, client_configuration: Optional[client.Configuration] = None
-    ) -> None:
-        super().__init__()
+            self,
+            conn_id="kubernetes_default"
+    ):
+        self.connection = self.get_connection(conn_id)
         self.conn_id = conn_id
-        self.client_configuration = client_configuration
+        self.extras = self.connection.extra_dejson
 
-    def get_conn(self) -> Any:
-        """Returns kubernetes api session for use with requests"""
-        connection = self.get_connection(self.conn_id)
-        extras = connection.extra_dejson
-        in_cluster = extras.get("extra__kubernetes__in_cluster")
-        kubeconfig_path = extras.get("extra__kubernetes__kube_config_path")
-        kubeconfig = extras.get("extra__kubernetes__kube_config")
-        num_selected_configuration = len([o for o in [in_cluster, kubeconfig, kubeconfig_path] if o])
-
-        if num_selected_configuration > 1:
-            raise AirflowException(
-                "Invalid connection configuration. Options extra__kubernetes__kube_config_path, "
-                "extra__kubernetes__kube_config, extra__kubernetes__in_cluster are mutually exclusive. "
-                "You can only use one option at a time."
-            )
-        if in_cluster:
+    def get_conn(self):
+        """
+        Returns kubernetes api session for use with requests
+        """
+        if self._get_field(("in_cluster")):
             self.log.debug("loading kube_config from: in_cluster configuration")
             config.load_incluster_config()
-            return client.ApiClient()
-
-        if kubeconfig_path is not None:
-            self.log.debug("loading kube_config from: %s", kubeconfig_path)
-            config.load_kube_config(
-                config_file=kubeconfig_path, client_configuration=self.client_configuration
-            )
-            return client.ApiClient()
-
-        if kubeconfig is not None:
+        elif self._get_field("kube_config") is None or self._get_field("kube_config") == '':
+            self.log.debug("loading kube_config from: default file")
+            config.load_kube_config()
+        else:
             with tempfile.NamedTemporaryFile() as temp_config:
                 self.log.debug("loading kube_config from: connection kube_config")
-                temp_config.write(kubeconfig.encode())
+                temp_config.write(self._get_field("kube_config").encode())
                 temp_config.flush()
-                config.load_kube_config(
-                    config_file=temp_config.name, client_configuration=self.client_configuration
-                )
-            return client.ApiClient()
-
-        self.log.debug("loading kube_config from: default file")
-        config.load_kube_config(client_configuration=self.client_configuration)
+                config.load_kube_config(temp_config.name)
+                temp_config.close()
         return client.ApiClient()
+
+    def get_namespace(self):
+        """
+        Returns the namespace that defined in the connection
+        """
+        return self._get_field("namespace", default="default")
+
+    def _get_field(self, field_name, default=None):
+        """
+        Fetches a field from extras, and returns it. This is some Airflow
+        magic. The kubernetes hook type adds custom UI elements
+        to the hook page, which allow admins to specify in_cluster configutation, kube_config, namespace etc.
+        They get formatted as shown below.
+        """
+        full_field_name = 'extra__kubernetes__{}'.format(field_name)
+        print(field_name)
+        if full_field_name in self.extras:
+            return self.extras[full_field_name]
+        else:
+            return default
 
     @cached_property
     def api_client(self) -> Any:
@@ -142,7 +75,7 @@ class KubernetesHook(BaseHook):
         return self.get_conn()
 
     def create_custom_object(
-        self, group: str, version: str, plural: str, body: Union[str, dict], namespace: Optional[str] = None
+            self, group: str, version: str, plural: str, body: Union[str, dict], namespace: Optional[str] = None
     ):
         """
         Creates custom resource definition object in Kubernetes
@@ -170,10 +103,10 @@ class KubernetesHook(BaseHook):
             self.log.debug("Response: %s", response)
             return response
         except client.rest.ApiException as e:
-            raise AirflowException(f"Exception when calling -> create_custom_object: {e}\n")
+            raise AirflowException("Exception when calling -> create_custom_object: %s\n" % e)
 
     def get_custom_object(
-        self, group: str, version: str, plural: str, name: str, namespace: Optional[str] = None
+            self, group: str, version: str, plural: str, name: str, namespace: Optional[str] = None
     ):
         """
         Get custom resource definition object from Kubernetes
@@ -198,7 +131,7 @@ class KubernetesHook(BaseHook):
             )
             return response
         except client.rest.ApiException as e:
-            raise AirflowException(f"Exception when calling -> get_custom_object: {e}\n")
+            raise AirflowException("Exception when calling -> get_custom_object: %s\n" % e)
 
     def get_namespace(self) -> str:
         """Returns the namespace that defined in the connection"""
@@ -208,10 +141,10 @@ class KubernetesHook(BaseHook):
         return namespace
 
     def get_pod_log_stream(
-        self,
-        pod_name: str,
-        container: Optional[str] = "",
-        namespace: Optional[str] = None,
+            self,
+            pod_name: str,
+            container: Optional[str] = "",
+            namespace: Optional[str] = None,
     ) -> Tuple[watch.Watch, Generator[str, None, None]]:
         """
         Retrieves a log stream for a container in a kubernetes pod.
@@ -235,10 +168,10 @@ class KubernetesHook(BaseHook):
         )
 
     def get_pod_logs(
-        self,
-        pod_name: str,
-        container: Optional[str] = "",
-        namespace: Optional[str] = None,
+            self,
+            pod_name: str,
+            container: Optional[str] = "",
+            namespace: Optional[str] = None,
     ):
         """
         Retrieves a container's log from the specified pod.

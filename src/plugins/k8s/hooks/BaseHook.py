@@ -20,6 +20,7 @@ import logging
 import warnings
 
 from typing import Any, Dict, List
+
 try:
     from typing import (  # type: ignore # noqa # pylint: disable=unused-import
         Protocol,
@@ -31,7 +32,7 @@ except ImportError:
 
 
 from airflow.models.connection import Connection
-# from airflow.typing_compat import Protocol
+from k8s.backcompat.models.connection import Connection as K8sConnection
 from airflow.utils.log.logging_mixin import LoggingMixin
 
 log = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class BaseHook(LoggingMixin):
         :param conn_id: connection id
         :return: connection
         """
-        conn = Connection.get_connection_from_secrets(conn_id)
+        conn = Connection.get_connection(conn_id)
         if conn.host:
             log.info(
                 "Using connection to: id: %s. Host: %s, Port: %s, Schema: %s, Login: %s, Password: %s, "

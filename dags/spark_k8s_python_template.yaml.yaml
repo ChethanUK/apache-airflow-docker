@@ -1,0 +1,104 @@
+# Spark Tutorial
+---
+apiVersion: "sparkoperator.k8s.io/v1beta2"
+kind: SparkApplication
+metadata:
+  name: "spark-pi-ex1-{{ ds }}-{{ task_instance.try_number }}"
+  namespace: spark
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: "chethanuk/spark:v3.0-gcsk1"
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/application/pi.py
+  arguments:
+    - "20000"
+  sparkVersion: "3.0.0"
+  deps:
+    jars:
+      - https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.15.0/jmx_prometheus_javaagent-0.15.0.jar
+    repositories:
+      - https://oss.sonatype.org/content/repositories/snapshots
+      - https://scala-tools.org/repo-releases/
+      - https://repo.spray.cc
+      - https://packages.confluent.io/maven/
+#    packages:
+#      - io.delta:delta-core:0.8.0
+#    files:
+#      - gs://spark-data/data-file-1.txt
+#  monitoring:
+#    exposeDriverMetrics: true
+#    exposeExecutorMetrics: true
+#    prometheus:
+#      jmxExporterJar: "/var/spark-data/spark-jars/jmx_prometheus_javaagent-0.15.0.jar"
+  dynamicAllocation:
+    enabled: false # Spark 3.0.0
+    initialExecutors: 2
+    minExecutors: 2
+    maxExecutors: 8
+#  sparkConf:
+#    "spark.ui.port": "4045"
+#    "spark.eventLog.enabled": "true"
+#    "spark.eventLog.dir": "hdfs://hdfs-namenode-1:8020/spark/spark-events"
+#  hadoopConf:
+#    "fs.gs.project.id": spark
+#    "fs.gs.system.bucket": spark
+#    "google.cloud.auth.service.account.enable": true
+#    "google.cloud.auth.service.account.json.keyfile": /mnt/secrets/key.json
+  restartPolicy:
+    type: Never # OnFailure
+    onFailureRetries: 3
+    onFailureRetryInterval: 10
+    onSubmissionFailureRetries: 5
+    onSubmissionFailureRetryInterval: 20
+  volumes:
+    - name: "test-volume"
+      hostPath:
+        path: "/tmp"
+        type: Directory
+  driver:
+#    initContainers:
+#      - name: "init-container1"
+#      image: "sidecar1:latest"
+#    sidecars:
+#    - name: "sidecar1"
+#      image: "sidecar1:latest"
+    cores: 1
+    coreLimit: "1200m"
+    memory: "512m"
+    env:
+      - name: env
+        value: production
+    labels:
+      version: 3.0.0
+#    gpu:
+#      name: "nvidia.com/gpu"   # GPU resource name
+#      quantity: 1           # number of GPUs to request
+    serviceAccount: spark-spark
+    terminationGracePeriodSeconds: 30
+    # affinity:
+    lifecycle:
+      preStop:
+        exec:
+          command:
+          - /bin/bash
+          - -c
+          - touch /var/run/killspark && sleep 30
+    volumeMounts:
+      - name: "test-volume"
+        mountPath: "/tmp"
+  executor:
+    cores: 1
+    instances: 2
+    memory: "512m"
+    javaOptions: "-XX:+UnlockExperimentalVMOptions -XX:+UseCGroupMemoryLimitForHeap"
+    # affinity:
+    labels:
+      version: 3.0.0
+#    gpu:
+#      name: "nvidia.com/gpu"   # GPU resource name
+#      quantity: 1           # number of GPUs to request
+    volumeMounts:
+      - name: "test-volume"
+        mountPath: "/tmp"

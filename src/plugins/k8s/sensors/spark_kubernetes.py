@@ -17,13 +17,11 @@
 # under the License.
 from typing import Dict, Optional
 
-from kubernetes import client
-
 from airflow.exceptions import AirflowException
-
 from airflow.sensors.base_sensor_operator import BaseSensorOperator
 # from airflow.operators.sensors import BaseSensorOperator
 from airflow.utils.decorators import apply_defaults
+from kubernetes import client
 
 from k8s.hooks.kubernetes import KubernetesHook
 
@@ -46,28 +44,28 @@ class SparkKubernetesSensor(BaseSensorOperator):
     :type attach_log: bool
     """
 
-    template_fields = ("application_name", "namespace")
+    template_fields = ('application_name', 'namespace')
+    # INTERMEDIATE_STATES = ('SUBMITTED', 'RUNNING', 'PENDING_RERUN', '')
     FAILURE_STATES = ("FAILED", "UNKNOWN")
     SUCCESS_STATES = ("COMPLETED",)
 
     @apply_defaults
-    def __init__(
-        self,
-        *,
-        application_name: str,
-        attach_log: bool = False,
-        namespace: Optional[str] = None,
-        kubernetes_conn_id: str = "kubernetes_default",
-        **kwargs,
-    ) -> None:
+    def __init__(self,
+                 *,
+                 application_name: str,
+                 attach_log: bool = False,
+                 namespace: Optional[str] = None,
+                 kubernetes_conn_id: str = "kubernetes_default",
+                 **kwargs):
         super().__init__(**kwargs)
         self.application_name = application_name
-        self.attach_log = attach_log
         self.namespace = namespace
         self.kubernetes_conn_id = kubernetes_conn_id
+        self.attach_log = attach_log
         self.hook = KubernetesHook(conn_id=self.kubernetes_conn_id)
 
     def _log_driver(self, application_state: str, response: dict) -> None:
+        self.log.info("Spark application logs:")
         if not self.attach_log:
             return
         status_info = response["status"]
@@ -93,26 +91,42 @@ class SparkKubernetesSensor(BaseSensorOperator):
                 e,
             )
 
-    def poke(self, context: Dict) -> bool:
+    def poke(self, context: Dict):
         self.log.info("Poking: %s", self.application_name)
-        response = self.hook.get_custom_object(
-            group="sparkoperator.k8s.io",
-            version="v1beta2",
-            plural="sparkapplications",
-            name=self.application_name,
-            namespace=self.namespace,
-        )
-        try:
-            application_state = response["status"]["applicationState"]["state"]
-        except KeyError:
-            return False
-        if self.attach_log and application_state in self.FAILURE_STATES + self.SUCCESS_STATES:
-            self._log_driver(application_state, response)
-        if application_state in self.FAILURE_STATES:
-            raise AirflowException(f"Spark application failed with state: {application_state}")
-        elif application_state in self.SUCCESS_STATES:
-            self.log.info("Spark application ended successfully")
-            return True
+        if self.namespace is None:
+            namespace = self.hook.get_namespace()
         else:
-            self.log.info("Spark application is still in state: %s", application_state)
-            return False
+            namespace = self.namespace
+        self.log.info("Spark application namespace: %s" % namespace)
+
+        try:
+            response = self.hook.get_custom_object(
+                group="sparkoperator.k8s.io",
+                version="v1beta2",
+                plural="sparkapplications",
+                name=self.application_name,
+                namespace=self.namespace,
+            )
+
+            try:
+                application_state = response['status']['applicationState']['state']
+            except KeyError:
+                return False
+
+            if self.attach_log and application_state in self.FAILURE_STATES + self.SUCCESS_STATES:
+                self._log_driver(application_state, response)
+
+            if application_state in self.FAILURE_STATES:
+                raise AirflowException("Spark application failed with state: %s" % application_state)
+
+            if application_state in self.FAILURE_STATES:
+                raise AirflowException("Spark application failed with state: %s" % application_state)
+            elif application_state in self.SUCCESS_STATES:
+                self.log.info("Spark application ended successfully: %s" % str(response['status']))
+                return True
+            else:
+                self.log.info("Spark application is still in state: %s", application_state)
+                return False
+
+        except client.rest.ApiException as e:
+            raise AirflowException("Exception when calling -> get_custom_resource_definition: %s\n" % e)

@@ -15,27 +15,30 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from typing import Optional
+import yaml
 
+from typing import Optional
+from kubernetes import client
+
+from airflow import AirflowException
 from airflow.models import BaseOperator
-from k8s.hooks.kubernetes import KubernetesHook
 from airflow.utils.decorators import apply_defaults
+
+from k8s.hooks.kubernetes import KubernetesHook
 
 
 class SparkKubernetesOperator(BaseOperator):
     """
     Creates sparkApplication object in kubernetes cluster:
-
-    .. seealso::
+       .. seealso::
         For more detail about Spark Application Object have a look at the reference:
-        https://github.com/GoogleCloudPlatform/spark-on-k8s-operator/blob/v1beta2-1.1.0-2.4.5/docs/api-docs.md#sparkapplication
-
+        https://github.com/GoogleCloudPlatform/spark-on-k8s-operator/blob/master/docs/api-docs.md#sparkapplication
     :param application_file: filepath to kubernetes custom_resource_definition of sparkApplication
     :type application_file:  str
     :param namespace: kubernetes namespace to put sparkApplication
     :type namespace: str
     :param kubernetes_conn_id: the connection to Kubernetes cluster
-    :type kubernetes_conn_id: str
+    :type conn_id: str
     """
 
     template_fields = ['application_file', 'namespace']
@@ -43,27 +46,43 @@ class SparkKubernetesOperator(BaseOperator):
     ui_color = '#f4a460'
 
     @apply_defaults
-    def __init__(
-        self,
-        *,
-        application_file: str,
-        namespace: Optional[str] = None,
-        kubernetes_conn_id: str = 'kubernetes_default',
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
+    def __init__(self,
+                 application_file: str,
+                 namespace: Optional[str] = None,
+                 conn_id: str = 'kubernetes_default',
+                 *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.application_file = application_file
         self.namespace = namespace
-        self.kubernetes_conn_id = kubernetes_conn_id
+        self.conn_id = conn_id
 
     def execute(self, context):
         self.log.info("Creating sparkApplication")
-        hook = KubernetesHook(conn_id=self.kubernetes_conn_id)
-        response = hook.create_custom_object(
-            group="sparkoperator.k8s.io",
-            version="v1beta2",
-            plural="sparkapplications",
-            body=self.application_file,
-            namespace=self.namespace,
-        )
-        return response
+        hook = KubernetesHook(conn_id=self.conn_id)
+        api_client = hook.get_conn()
+        api = client.CustomObjectsApi(api_client)
+        application_dict = self._load_application_to_dict()
+        if self.namespace is None:
+            namespace = hook.get_namespace()
+        else:
+            namespace = self.namespace
+        try:
+            response = api.create_namespaced_custom_object(
+                group="sparkoperator.k8s.io",
+                version="v1beta2",
+                namespace=namespace,
+                plural="sparkapplications",
+                body=application_dict
+            )
+            self.log.info("Response from Kubernetes API: %s", response)
+            return response
+        except client.rest.ApiException as e:
+            raise AirflowException("Exception when calling -> create_custom_resource_definition: %s\n" % e)
+
+    def _load_application_to_dict(self):
+        try:
+            application_dict = yaml.safe_load(self.application_file)
+            self.log.info("Creating Spark Application with Spec: %s\n" % str(application_dict))
+        except yaml.YAMLError as e:
+            raise AirflowException("Exception when loading application_file: %s\n" % e)
+        return application_dict

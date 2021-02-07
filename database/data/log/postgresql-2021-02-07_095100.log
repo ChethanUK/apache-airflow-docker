@@ -1,8 +1,0 @@
-2021-02-07 09:51:00.944 UTC [1] LOG:  starting PostgreSQL 13.1 (Debian 13.1-1.pgdg100+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 8.3.0-6) 8.3.0, 64-bit
-2021-02-07 09:51:00.944 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-2021-02-07 09:51:00.944 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-2021-02-07 09:51:00.952 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-2021-02-07 09:51:00.990 UTC [27] LOG:  database system was shut down at 2021-02-07 09:47:56 UTC
-2021-02-07 09:51:01.035 UTC [1] LOG:  database system is ready to accept connections
-2021-02-07 09:53:01.251 UTC [31] WARNING:  could not open statistics file "pg_stat_tmp/global.stat": Operation not permitted
-2021-02-07 10:01:01.964 UTC [1241] WARNING:  could not open statistics file "pg_stat_tmp/global.stat": Operation not permitted
